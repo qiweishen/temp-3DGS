@@ -450,38 +450,44 @@ class GaussianModel:
                 padded_grad[:min(grads.shape[0], n_init_points)] = grads[:min(grads.shape[0], n_init_points)]
             grads = padded_grad
 
+        # Get the minimum size among all tensors
+        min_size = min(n_init_points, 
+                      self.get_scaling.shape[0],
+                      self._rotation.shape[0],
+                      self._features_dc.shape[0],
+                      self._features_rest.shape[0],
+                      self._opacity.shape[0],
+                      self.tmp_radii.shape[0])
+
+        # Truncate grads to minimum size
+        grads = grads[:min_size]
+        
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(grads >= grad_threshold, True, False).squeeze()
+        scaling_mask = torch.max(self.get_scaling[:min_size], dim=1).values > self.percent_dense*scene_extent
         
-        # Ensure scaling mask has the same size as selected_pts_mask
-        scaling_values = torch.max(self.get_scaling, dim=1).values
-        if scaling_values.shape[0] != selected_pts_mask.shape[0]:
-            # If sizes don't match, create new masks with correct size
-            n_points = min(selected_pts_mask.shape[0], scaling_values.shape[0])
-            selected_pts_mask = selected_pts_mask[:n_points]
-            scaling_mask = scaling_values[:n_points] > self.percent_dense*scene_extent
-        else:
-            scaling_mask = scaling_values > self.percent_dense*scene_extent
-        
-        # Now both masks should have the same size
+        # Combine masks
         selected_pts_mask = torch.logical_and(selected_pts_mask, scaling_mask)
 
-        stds = self.get_scaling[selected_pts_mask].repeat(N,1)
-        means =torch.zeros((stds.size(0), 3),device="cuda")
+        # Use the mask to index all tensors (which now have the same size)
+        stds = self.get_scaling[:min_size][selected_pts_mask].repeat(N,1)
+        means = torch.zeros((stds.size(0), 3), device="cuda")
         samples = torch.normal(mean=means, std=stds)
-        rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
-        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
-        # new_scaling = self.scaling_inverse_activation(self.get_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
-        new_scaling = self._scaling[selected_pts_mask].repeat(N,1)
-        new_rotation = self._rotation[selected_pts_mask].repeat(N,1)
-        new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
-        new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
-        new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
-        new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
+        rots = build_rotation(self._rotation[:min_size][selected_pts_mask]).repeat(N,1,1)
+        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[:min_size][selected_pts_mask].repeat(N, 1)
+        new_scaling = self._scaling[:min_size][selected_pts_mask].repeat(N,1)
+        new_rotation = self._rotation[:min_size][selected_pts_mask].repeat(N,1)
+        new_features_dc = self._features_dc[:min_size][selected_pts_mask].repeat(N,1,1)
+        new_features_rest = self._features_rest[:min_size][selected_pts_mask].repeat(N,1,1)
+        new_opacity = self._opacity[:min_size][selected_pts_mask].repeat(N,1)
+        new_tmp_radii = self.tmp_radii[:min_size][selected_pts_mask].repeat(N)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
 
-        prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
+        # Create pruning mask that matches the full size of tensors after densification
+        full_mask = torch.zeros(min_size, dtype=bool, device="cuda")
+        full_mask[:selected_pts_mask.shape[0]] = selected_pts_mask
+        prune_filter = torch.cat((full_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
