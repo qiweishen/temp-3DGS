@@ -343,16 +343,35 @@ class GaussianModel:
         for group in self.optimizer.param_groups:
             stored_state = self.optimizer.state.get(group['params'][0], None)
             if stored_state is not None:
-                stored_state["exp_avg"] = stored_state["exp_avg"][mask]
-                stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
+                # Handle tensors with different dimensions
+                param_shape = group['params'][0].shape
+                if len(param_shape) > 1:
+                    # For multi-dimensional tensors, expand mask to match dimensions
+                    expanded_mask = mask.view(-1, *([1] * (len(param_shape) - 1))).expand_as(group['params'][0])
+                    stored_state["exp_avg"] = stored_state["exp_avg"][expanded_mask].view(-1, *param_shape[1:])
+                    stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][expanded_mask].view(-1, *param_shape[1:])
+                    new_param = group["params"][0][expanded_mask].view(-1, *param_shape[1:])
+                else:
+                    # For 1D tensors, use mask directly
+                    stored_state["exp_avg"] = stored_state["exp_avg"][mask]
+                    stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
+                    new_param = group["params"][0][mask]
 
                 del self.optimizer.state[group['params'][0]]
-                group["params"][0] = nn.Parameter((group["params"][0][mask].requires_grad_(True)))
+                group["params"][0] = nn.Parameter(new_param.requires_grad_(True))
                 self.optimizer.state[group['params'][0]] = stored_state
 
                 optimizable_tensors[group["name"]] = group["params"][0]
             else:
-                group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True))
+                # Handle parameters without state similarly
+                param_shape = group['params'][0].shape
+                if len(param_shape) > 1:
+                    expanded_mask = mask.view(-1, *([1] * (len(param_shape) - 1))).expand_as(group['params'][0])
+                    new_param = group["params"][0][expanded_mask].view(-1, *param_shape[1:])
+                else:
+                    new_param = group["params"][0][mask]
+                    
+                group["params"][0] = nn.Parameter(new_param.requires_grad_(True))
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
