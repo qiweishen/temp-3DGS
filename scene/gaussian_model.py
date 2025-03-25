@@ -386,22 +386,54 @@ class GaussianModel:
         return optimizable_tensors
 
     def prune_points(self, mask):
+        # Check if we have any points to prune
+        if self._xyz.shape[0] == 0:
+            return
+            
         valid_points_mask = ~mask
-        optimizable_tensors = self._prune_optimizer(valid_points_mask)
-
-        self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
-        self._opacity = optimizable_tensors["opacity"]
-        self._rotation = optimizable_tensors["rotation"]
         
-        # Handle scaling separately since it's not in optimizer
-        self._scaling = self._scaling[valid_points_mask]
+        # Only attempt pruning if mask and tensor have compatible sizes
+        if valid_points_mask.shape[0] > 0 and self._xyz.shape[0] > 0:
+            optimizable_tensors = self._prune_optimizer(valid_points_mask)
 
-        self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
-        self.denom = self.denom[valid_points_mask]
-        self.max_radii2D = self.max_radii2D[valid_points_mask]
-        self.tmp_radii = self.tmp_radii[valid_points_mask]
+            self._xyz = optimizable_tensors["xyz"]
+            self._features_dc = optimizable_tensors["f_dc"]
+            self._features_rest = optimizable_tensors["f_rest"]
+            self._opacity = optimizable_tensors["opacity"]
+            self._rotation = optimizable_tensors["rotation"]
+            
+            # Handle scaling separately since it's not in optimizer
+            if self._scaling.shape[0] > 0 and valid_points_mask.shape[0] > 0:
+                # If tensor is not empty and has compatible size with mask
+                if self._scaling.shape[0] == valid_points_mask.shape[0]:
+                    self._scaling = self._scaling[valid_points_mask]
+                # If sizes don't match, handle it safely
+                elif self._scaling.shape[0] > 0 and valid_points_mask.shape[0] > 0:
+                    # Use as much of the mask as possible
+                    min_size = min(self._scaling.shape[0], valid_points_mask.shape[0])
+                    if min_size > 0:
+                        self._scaling = self._scaling[:min_size][valid_points_mask[:min_size]]
+
+            # Only update these if they have points and compatible sizes
+            if self.xyz_gradient_accum.shape[0] > 0 and self.xyz_gradient_accum.shape[0] == valid_points_mask.shape[0]:
+                self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
+            else:
+                self.xyz_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
+                
+            if self.denom.shape[0] > 0 and self.denom.shape[0] == valid_points_mask.shape[0]:
+                self.denom = self.denom[valid_points_mask]
+            else:
+                self.denom = torch.zeros((self._xyz.shape[0], 1), device="cuda")
+                
+            if self.max_radii2D.shape[0] > 0 and self.max_radii2D.shape[0] == valid_points_mask.shape[0]:
+                self.max_radii2D = self.max_radii2D[valid_points_mask]
+            else:
+                self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
+                
+            if self.tmp_radii is not None and self.tmp_radii.shape[0] > 0 and self.tmp_radii.shape[0] == valid_points_mask.shape[0]:
+                self.tmp_radii = self.tmp_radii[valid_points_mask]
+            elif self.tmp_radii is not None:
+                self.tmp_radii = torch.zeros((self._xyz.shape[0]), device="cuda")
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -438,8 +470,14 @@ class GaussianModel:
         self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
         self._rotation = optimizable_tensors["rotation"]
+        
         # Handle scaling separately since it's not in optimizer
-        self._scaling = nn.Parameter(new_scaling.requires_grad_(False))
+        if self._scaling.shape[0] > 0:
+            # If we have existing scaling values, concatenate with new ones
+            self._scaling = nn.Parameter(torch.cat([self._scaling, new_scaling], dim=0).requires_grad_(False))
+        else:
+            # If scaling is empty, just use the new scaling values
+            self._scaling = nn.Parameter(new_scaling.requires_grad_(False))
 
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -471,6 +509,10 @@ class GaussianModel:
         torch.cuda.empty_cache()
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+        # Check if we have any points to process
+        if self.get_xyz.shape[0] == 0:
+            return
+            
         n_init_points = self.get_xyz.shape[0]
         
         # Ensure grads matches current point count
@@ -480,25 +522,46 @@ class GaussianModel:
                 padded_grad[:min(grads.shape[0], n_init_points)] = grads[:min(grads.shape[0], n_init_points)]
             grads = padded_grad
 
-        # Get the minimum size among all tensors
-        min_size = min(n_init_points, 
-                      self.get_scaling.shape[0],
-                      self._rotation.shape[0],
-                      self._features_dc.shape[0],
-                      self._features_rest.shape[0],
-                      self._opacity.shape[0],
-                      self.tmp_radii.shape[0])
+        # Get the minimum size among all non-empty tensors
+        tensor_sizes = [n_init_points]
+        if self.get_scaling.shape[0] > 0:
+            tensor_sizes.append(self.get_scaling.shape[0])
+        if self._rotation.shape[0] > 0:
+            tensor_sizes.append(self._rotation.shape[0])
+        if self._features_dc.shape[0] > 0:
+            tensor_sizes.append(self._features_dc.shape[0])
+        if self._features_rest.shape[0] > 0:
+            tensor_sizes.append(self._features_rest.shape[0])
+        if self._opacity.shape[0] > 0:
+            tensor_sizes.append(self._opacity.shape[0])
+        if self.tmp_radii is not None and self.tmp_radii.shape[0] > 0:
+            tensor_sizes.append(self.tmp_radii.shape[0])
+            
+        if not tensor_sizes:
+            return  # No tensors to process
+            
+        min_size = min(tensor_sizes)
+        
+        # If min_size is 0, we don't have data to process
+        if min_size == 0:
+            return
 
         # Truncate grads to minimum size
         grads = grads[:min_size]
         
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(grads >= grad_threshold, True, False).squeeze()
-        scaling_mask = torch.max(self.get_scaling[:min_size], dim=1).values > self.percent_dense*scene_extent
         
-        # Combine masks
-        selected_pts_mask = torch.logical_and(selected_pts_mask, scaling_mask)
-
+        # Only process scaling if it's not empty
+        if self.get_scaling.shape[0] >= min_size:
+            scaling_mask = torch.max(self.get_scaling[:min_size], dim=1).values > self.percent_dense*scene_extent
+            # Combine masks
+            selected_pts_mask = torch.logical_and(selected_pts_mask, scaling_mask)
+        
+        # If no points selected, nothing to do
+        if not selected_pts_mask.any():
+            return
+            
         # Use the mask to index all tensors (which now have the same size)
         stds = self.get_scaling[:min_size][selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
@@ -510,15 +573,26 @@ class GaussianModel:
         new_features_dc = self._features_dc[:min_size][selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[:min_size][selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[:min_size][selected_pts_mask].repeat(N,1)
-        new_tmp_radii = self.tmp_radii[:min_size][selected_pts_mask].repeat(N)
-
+        
+        # Handle tmp_radii carefully
+        if self.tmp_radii is not None and self.tmp_radii.shape[0] >= min_size:
+            new_tmp_radii = self.tmp_radii[:min_size][selected_pts_mask].repeat(N)
+        else:
+            # If tmp_radii is empty or too small, create a new one with zeros
+            new_tmp_radii = torch.zeros(selected_pts_mask.sum().item() * N, device="cuda")
+            
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
 
         # Create pruning mask that matches the full size of tensors after densification
-        full_mask = torch.zeros(min_size, dtype=bool, device="cuda")
-        full_mask[:selected_pts_mask.shape[0]] = selected_pts_mask
-        prune_filter = torch.cat((full_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
-        self.prune_points(prune_filter)
+        if min_size > 0:
+            full_mask = torch.zeros(min_size, dtype=bool, device="cuda")
+            if selected_pts_mask.shape[0] <= full_mask.shape[0]:
+                full_mask[:selected_pts_mask.shape[0]] = selected_pts_mask
+            else:
+                full_mask = selected_pts_mask[:full_mask.shape[0]]
+                
+            prune_filter = torch.cat((full_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
+            self.prune_points(prune_filter)
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
