@@ -163,7 +163,7 @@ class GaussianModel:
         avg_dist = torch.mean(torch.sqrt(dist2))
         base_scale = torch.log(avg_dist) * torch.ones_like(dist2)
         scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
-        scales[:, 0] = base_scale * 7.0
+        scales[:, 0] = base_scale * 25.0
         scales[:, 1] = base_scale
         scales[:, 2] = base_scale
         # scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
