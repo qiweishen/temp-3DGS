@@ -160,7 +160,7 @@ class GaussianModel:
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         base_scale = torch.log(torch.sqrt(dist2))
-        scales = torch.zeros((base_scale.shape[0], 3))
+        scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
         scales[:, 0] = base_scale * 5.0
         scales[:, 1] = base_scale
         scales[:, 2] = base_scale
@@ -400,7 +400,6 @@ class GaussianModel:
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "opacity": new_opacities,
-        "scaling" : new_scaling,
         "rotation" : new_rotation}
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
@@ -408,10 +407,9 @@ class GaussianModel:
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
-        self._scaling = optimizable_tensors["scaling"]
-        # Ensure scaling parameters are not updated during training
-        self._scaling.requires_grad_(False)
         self._rotation = optimizable_tensors["rotation"]
+        # Handle scaling separately since it's not in optimizer
+        self._scaling = nn.Parameter(new_scaling.requires_grad_(False))
 
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
