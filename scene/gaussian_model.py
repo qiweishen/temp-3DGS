@@ -420,10 +420,13 @@ class GaussianModel:
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[:grads.shape[0]] = grads.squeeze()
+        if grads.shape[0] > 0:  # Only fill if we have gradients
+            padded_grad[:min(grads.shape[0], n_init_points)] = grads.squeeze()[:min(grads.shape[0], n_init_points)]
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        
+        # Get scaling mask with same size as selected_pts_mask
+        scaling_mask = torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent
+        selected_pts_mask = torch.logical_and(selected_pts_mask, scaling_mask)
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
