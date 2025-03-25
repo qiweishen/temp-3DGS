@@ -452,9 +452,18 @@ class GaussianModel:
 
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(grads >= grad_threshold, True, False).squeeze()
-        scaling_mask = torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent
         
-        # Both masks should now have the same size since we're using the current point count
+        # Ensure scaling mask has the same size as selected_pts_mask
+        scaling_values = torch.max(self.get_scaling, dim=1).values
+        if scaling_values.shape[0] != selected_pts_mask.shape[0]:
+            # If sizes don't match, create new masks with correct size
+            n_points = min(selected_pts_mask.shape[0], scaling_values.shape[0])
+            selected_pts_mask = selected_pts_mask[:n_points]
+            scaling_mask = scaling_values[:n_points] > self.percent_dense*scene_extent
+        else:
+            scaling_mask = scaling_values > self.percent_dense*scene_extent
+        
+        # Now both masks should have the same size
         selected_pts_mask = torch.logical_and(selected_pts_mask, scaling_mask)
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
