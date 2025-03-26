@@ -148,7 +148,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_from_pcd(self, pcd : BasicPointCloud, cam_infos : int, spatial_lr_scale : float, scaling_coefficient : float = 5.0):
+    def create_from_pcd(self, pcd : BasicPointCloud, cam_infos : int, spatial_lr_scale : float, lower_quartile : float = 0.25, scaling_coefficient : float = 5.0):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
@@ -162,7 +162,7 @@ class GaussianModel:
         # Use the average distance for base_scale calculation
         # Calculate the 25% lower interval value
         sorted_dists = torch.sort(torch.sqrt(dist2))[0]
-        lower_quartile_idx = int(sorted_dists.shape[0] * 0.25)
+        lower_quartile_idx = int(sorted_dists.shape[0] * lower_quartile)
         base_dist = sorted_dists[lower_quartile_idx]
         base_scale = base_dist * torch.ones_like(dist2)
         scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
