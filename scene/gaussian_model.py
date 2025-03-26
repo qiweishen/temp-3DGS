@@ -163,6 +163,12 @@ class GaussianModel:
         # Calculate the 25% lower interval value
         sorted_dists = torch.sort(torch.sqrt(dist2))[0]
         lower_quartile_idx = int(sorted_dists.shape[0] * lower_quartile)
+        print(f"Lower quartile index: {lower_quartile_idx} (out of {sorted_dists.shape[0]} points)")
+        user_input = input("Continue with this index? [Y/n]: ")
+        if user_input and user_input.lower() != 'y':
+            print("Aborting operation as requested by user.")
+            import sys
+            sys.exit(0)
         base_dist = sorted_dists[lower_quartile_idx]
         base_scale = base_dist * torch.ones_like(dist2)
         scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
