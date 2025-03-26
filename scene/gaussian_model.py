@@ -160,12 +160,15 @@ class GaussianModel:
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         # Use the average distance for base_scale calculation
-        avg_dist = torch.mean(torch.sqrt(dist2))
-        base_scale = torch.log(avg_dist) * torch.ones_like(dist2)
+        # Calculate the 25% lower interval value
+        sorted_dists = torch.sort(torch.sqrt(dist2))[0]
+        lower_quartile_idx = int(sorted_dists.shape[0] * 0.25)
+        base_dist = sorted_dists[lower_quartile_idx]
+        base_scale = base_dist * torch.ones_like(dist2)
         scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
-        scales[:, 0] = base_scale * 25.0
-        scales[:, 1] = base_scale
-        scales[:, 2] = base_scale
+        scales[:, 0] = torch.log(base_scale * 10.0)
+        scales[:, 1] = torch.log(base_scale)
+        scales[:, 2] = torch.log(base_scale)
         # scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
 
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
