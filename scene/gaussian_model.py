@@ -173,8 +173,8 @@ class GaussianModel:
         base_scale = base_dist * torch.ones_like(dist2)
         scales = torch.zeros((base_scale.shape[0], 3), device="cuda")
         scales[:, 0] = torch.log(base_scale * scaling_coefficient)
-        scales[:, 1] = torch.log(base_scale)
-        scales[:, 2] = torch.log(base_scale)
+        scales[:, 1] = torch.log(base_scale * 0.5)
+        scales[:, 2] = torch.log(base_scale * 0.5)
         # scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
 
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
